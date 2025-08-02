@@ -1,0 +1,120 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Set background color on :root for overscroll areas */
+:root {
+  background-color: rgb(249 250 251); /* gray-50 */
+}
+
+:root.dark {
+  background-color: rgb(17 24 39); /* gray-900 */
+}
+
+@layer base {
+  html {
+    @apply antialiased bg-gray-50;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    /* Fix overscroll background color */
+    background-color: rgb(249 250 251); /* gray-50 */
+  }
+  
+  html.dark {
+    background-color: rgb(17 24 39); /* gray-900 */
+  }
+  
+  body {
+    @apply bg-gray-50 text-gray-900 min-h-screen;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Fix overscroll on mobile */
+    overscroll-behavior: none;
+    overscroll-behavior-y: none;
+  }
+  
+  body.dark {
+    @apply bg-gray-900 text-gray-100;
+  }
+  
+  /* Root app container */
+  #root {
+    min-height: 100vh;
+    background-color: inherit;
+  }
+  
+  /* Additional overscroll fixes for specific scenarios */
+  @supports (-webkit-touch-callout: none) {
+    /* iOS specific fixes */
+    body {
+      /* This helps with the rubber band effect */
+      position: relative;
+    }
+  }
+  
+  /* Apply overscroll behavior to all scrollable elements */
+  * {
+    overscroll-behavior: contain;
+  }
+  
+  /* Ensure main containers have proper backgrounds */
+  .min-h-screen {
+    background-color: inherit;
+  }
+  
+  /* Prevent text selection on buttons */
+  button {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  
+  /* Improve touch targets on mobile */
+  @media (max-width: 768px) {
+    button, a, input, textarea, select {
+      min-height: 44px;
+      min-width: 44px;
+    }
+  }
+  
+  /* Smooth scrolling */
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  /* Fix iOS form zoom */
+  input, textarea, select {
+    font-size: 16px;
+  }
+  
+  /* Focus indicators for better accessibility */
+  *:focus {
+    outline: none;
+  }
+  
+  *:focus-visible {
+    @apply ring-2 ring-primary ring-offset-2;
+  }
+  
+  /* Skip link styles */
+  .sr-only:focus {
+    @apply not-sr-only absolute top-4 left-4 z-50;
+  }
+  
+  /* High contrast mode support */
+  @media (prefers-contrast: high) {
+    * {
+      @apply border-opacity-100;
+    }
+  }
+  
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+} 

@@ -1,0 +1,611 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Card } from '../components/common/Card';
+import { Button } from '../components/common/Button';
+import { Input } from '../components/common/Input';
+import { Spinner } from '../components/common/Spinner';
+import { SkillLevelSelector, type SkillLevel } from '../components/profile/SkillLevelSelector';
+import { useAuthStore } from '../stores/authStore';
+import { UserCircleIcon, CameraIcon, CheckIcon } from '@heroicons/react/24/outline';
+import { usersApi } from '../api/users';
+import type { Position } from '../types';
+import { useOptimisticUpdate } from '../hooks/useOptimisticUpdate';
+
+interface ProfileFormData {
+  name: string;
+  preferredPosition: Position;
+  skillLevel: SkillLevel;
+}
+
+const POSITIONS = [
+  { value: 'goalkeeper', label: 'Goalkeeper', emoji: '🥅' },
+  { value: 'defender', label: 'Defender', emoji: '🛡️' },
+  { value: 'midfielder', label: 'Midfielder', emoji: '⚡' },
+  { value: 'forward', label: 'Forward', emoji: '⚽' },
+  { value: 'any', label: 'Any Position', emoji: '🎯' },
+];
+
+export const ProfilePage: React.FC = () => {
+  const { user, updateUser } = useAuthStore();
+  const location = useLocation();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [loading, setLoading] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [formData, setFormData] = useState<ProfileFormData>({
+    name: user?.name || '',
+    preferredPosition: user?.preferredPosition || 'any',
+    skillLevel: 3, // Default to intermediate
+  });
+  const [isEditing, setIsEditing] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const { executeUpdate: executeProfileUpdate } = useOptimisticUpdate(
+    async (data: { name: string; preferredPosition: string }) => {
+      return await usersApi.updateMe(data);
+    },
+    {
+      onSuccess: () => {
+        setIsEditing(false);
+        setSuccessMessage('Profile updated successfully!');
+        setTimeout(() => setSuccessMessage(''), 3000);
+      },
+      rollbackMessage: 'Failed to update profile. Your changes have been reverted.',
+    }
+  );
+
+  const { executeUpdate: executeAvatarUpload } = useOptimisticUpdate(
+    async (file: File) => {
+      return await usersApi.uploadAvatar(file);
+    },
+    {
+      onSuccess: () => {
+        setSuccessMessage('Profile picture updated!');
+        setTimeout(() => setSuccessMessage(''), 3000);
+      },
+      rollbackMessage: 'Failed to upload profile picture.',
+    }
+  );
+
+  const { executeUpdate: executeAvatarRemove } = useOptimisticUpdate(
+    async () => {
+      await usersApi.removeAvatar();
+      return { profilePicUrl: undefined };
+    },
+    {
+      onSuccess: () => {
+        setSuccessMessage('Profile picture removed!');
+        setTimeout(() => setSuccessMessage(''), 3000);
+      },
+      rollbackMessage: 'Failed to remove profile picture.',
+    }
+  );
+
+  useEffect(() => {
+    // Check if redirected from ProfileCompletionCheck
+    if (location.state?.message) {
+      setIsEditing(true);
+      setSuccessMessage(''); // Clear any existing success message
+    }
+  }, [location.state]);
+
+  // Check if profile is incomplete
+  const isProfileIncomplete = !user?.name || user?.preferredPosition === 'any';
+  const isNewUser = user?.createdAt && (Date.now() - new Date(user.createdAt).getTime()) < (24 * 60 * 60 * 1000);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handlePositionChange = (position: string) => {
+    setFormData(prev => ({ ...prev, preferredPosition: position as Position }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    
+    try {
+      await executeProfileUpdate(
+        {
+          name: formData.name,
+          preferredPosition: formData.preferredPosition,
+        },
+        () => {
+          // Optimistically update the user
+          if (user) {
+            updateUser({
+              ...user,
+              name: formData.name,
+              preferredPosition: formData.preferredPosition,
+            });
+          }
+        },
+        () => {
+          // Rollback to previous values
+          if (user) {
+            updateUser(user);
+          }
+        }
+      );
+    } catch {
+      setError('Failed to update profile. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+      alert('Please upload a JPEG or PNG image');
+      return;
+    }
+
+    // Validate file size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Please upload an image smaller than 5MB');
+      return;
+    }
+
+    setUploadingAvatar(true);
+    setError(null);
+    
+    // Create a temporary URL for the image
+    const tempUrl = URL.createObjectURL(file);
+    
+    try {
+      await executeAvatarUpload(
+        file,
+        () => {
+          // Optimistically update with temporary URL
+          if (user) {
+            updateUser({
+              ...user,
+              profilePicUrl: tempUrl,
+            });
+          }
+        },
+        () => {
+          // Rollback to previous avatar
+          if (user) {
+            updateUser(user);
+          }
+          // Clean up temporary URL
+          URL.revokeObjectURL(tempUrl);
+        }
+      );
+      
+      // After successful upload, update with real URL
+      const updatedUser = await usersApi.getMe();
+      updateUser(updatedUser);
+      
+      // Clean up temporary URL
+      URL.revokeObjectURL(tempUrl);
+    } catch {
+      setError('Failed to upload profile picture. Please try again.');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    setUploadingAvatar(true);
+    setError(null);
+    
+    const previousUrl = user?.profilePicUrl;
+    
+    try {
+      await executeAvatarRemove(
+        undefined,
+        () => {
+          // Optimistically remove avatar
+          if (user) {
+            updateUser({
+              ...user,
+              profilePicUrl: undefined,
+            });
+          }
+        },
+        () => {
+          // Rollback to previous avatar
+          if (user && previousUrl) {
+            updateUser({
+              ...user,
+              profilePicUrl: previousUrl,
+            });
+          }
+        }
+      );
+    } catch {
+      setError('Failed to remove profile picture. Please try again.');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
+  const getCompletionPercentage = () => {
+    let completed = 0;
+    const total = 3; // email, name, position
+    
+    if (user?.email) completed++;
+    if (user?.name) completed++;
+    if (user?.preferredPosition && user.preferredPosition !== 'any') completed++;
+    
+    return Math.round((completed / total) * 100);
+  };
+
+  if (!user) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Spinner />
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Page Header */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">My Profile</h1>
+        <p className="text-gray-600 dark:text-gray-300 mt-2">
+          Manage your personal information and preferences
+        </p>
+      </div>
+
+      {/* Profile Completion Message for New Users */}
+      {isProfileIncomplete && isNewUser && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4 md:p-6">
+          <div className="flex items-start space-x-3">
+            <div className="flex-shrink-0">
+              <svg className="w-6 h-6 text-amber-600 dark:text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-amber-900 dark:text-amber-100 mb-1">
+                Complete Your Profile to Get Started
+              </h3>
+              <p className="text-amber-800 dark:text-amber-200 text-sm md:text-base">
+                Welcome to Football Manager! To access all features and join teams, please complete your profile by:
+              </p>
+              <ul className="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-300">
+                <li className="flex items-center space-x-2">
+                  <span className={user?.name ? 'line-through opacity-60' : ''}>✓ Adding your name</span>
+                  {user?.name && <CheckIcon className="w-4 h-4 text-green-600" />}
+                </li>
+                <li className="flex items-center space-x-2">
+                  <span className={user?.preferredPosition && user.preferredPosition !== 'any' ? 'line-through opacity-60' : ''}>
+                    ✓ Selecting your preferred position (not "Any Position")
+                  </span>
+                  {user?.preferredPosition && user.preferredPosition !== 'any' && <CheckIcon className="w-4 h-4 text-green-600" />}
+                </li>
+              </ul>
+              <p className="mt-3 text-sm font-medium text-amber-900 dark:text-amber-100">
+                You won't be able to navigate to other pages until your profile is complete.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Original message if redirected */}
+      {location.state?.message && !isProfileIncomplete && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <p className="text-blue-800">{location.state.message}</p>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center space-x-2">
+          <CheckIcon className="w-5 h-5 text-green-600" />
+          <span className="text-green-800">{successMessage}</span>
+        </div>
+      )}
+
+      {/* Error Message */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <p className="text-red-800">{error}</p>
+        </div>
+      )}
+
+      {/* Profile Completion */}
+      <Card>
+        <div className="p-6">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Profile Completion
+          </h2>
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600 dark:text-gray-300">Your profile is {getCompletionPercentage()}% complete</span>
+              <span className="font-medium text-gray-900 dark:text-white">{getCompletionPercentage()}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div
+                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${getCompletionPercentage()}%` }}
+              />
+            </div>
+            {getCompletionPercentage() < 100 && (
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                Complete your profile to help with team organization
+              </p>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+        {/* Avatar Section */}
+        <Card className="lg:col-span-1">
+          <div className="p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Profile Picture
+            </h2>
+            <div className="space-y-4">
+              <div className="relative mx-auto w-32 h-32">
+                {uploadingAvatar && (
+                  <div className="absolute inset-0 bg-black bg-opacity-50 rounded-full flex items-center justify-center z-10">
+                    <Spinner className="text-white" />
+                  </div>
+                )}
+                {user.profilePicUrl ? (
+                  <img
+                    src={user.profilePicUrl}
+                    alt={user.name}
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                    <UserCircleIcon className="w-20 h-20 text-gray-400 dark:text-gray-500" />
+                  </div>
+                )}
+                <button
+                  onClick={handleAvatarClick}
+                  disabled={uploadingAvatar}
+                  className="absolute bottom-0 right-0 p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors disabled:opacity-50"
+                >
+                  <CameraIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png"
+                onChange={handleAvatarChange}
+                className="hidden"
+              />
+              <div className="text-center space-y-2">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  JPG or PNG. Max size 5MB.
+                </p>
+                {user.profilePicUrl && (
+                  <Button
+                    onClick={handleRemoveAvatar}
+                    variant="secondary"
+                    size="sm"
+                    disabled={uploadingAvatar}
+                  >
+                    Remove Picture
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* Profile Information */}
+        <Card className="lg:col-span-2">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Profile Information
+              </h2>
+              {!isEditing && (
+                <Button
+                  onClick={() => setIsEditing(true)}
+                  variant="secondary"
+                  size="sm"
+                >
+                  Edit Profile
+                </Button>
+              )}
+            </div>
+
+            {isEditing ? (
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Email
+                  </label>
+                  <Input
+                    type="email"
+                    value={user.email}
+                    disabled
+                    className="bg-gray-50 dark:bg-gray-700"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Email cannot be changed
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Full Name
+                  </label>
+                  <Input
+                    type="text"
+                    name="name"
+                    value={formData.name}
+                    onChange={handleInputChange}
+                    placeholder="Enter your full name"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Preferred Position
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {POSITIONS.map((position) => (
+                      <button
+                        key={position.value}
+                        type="button"
+                        onClick={() => handlePositionChange(position.value)}
+                        className={`p-3 rounded-lg border-2 transition-all ${
+                          formData.preferredPosition === position.value
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                        }`}
+                      >
+                        <div className="text-2xl mb-1">{position.emoji}</div>
+                        <div className="text-sm font-medium">{position.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                    This helps with team organization but doesn't guarantee position assignment
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Skill Level
+                  </label>
+                  <SkillLevelSelector
+                    value={formData.skillLevel}
+                    onChange={(level) => setFormData(prev => ({ ...prev, skillLevel: level }))}
+                  />
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                    Be honest! This helps create balanced teams
+                  </p>
+                </div>
+
+                <div className="flex space-x-3">
+                  <Button
+                    type="submit"
+                    disabled={loading}
+                  >
+                    {loading ? 'Saving...' : 'Save Changes'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setIsEditing(false);
+                      setFormData({
+                        name: user.name || '',
+                        preferredPosition: user.preferredPosition || 'any',
+                        skillLevel: 3,
+                      });
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400">
+                    Email
+                  </label>
+                  <p className="text-gray-900 dark:text-white mt-1">{user.email}</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400">
+                    Full Name
+                  </label>
+                  <p className="text-gray-900 dark:text-white mt-1">
+                    {user.name || <span className="text-gray-400 dark:text-gray-500">Not set</span>}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400">
+                    Preferred Position
+                  </label>
+                  <div className="flex items-center space-x-2 mt-1">
+                    <span className="text-2xl">
+                      {POSITIONS.find(p => p.value === user.preferredPosition)?.emoji || '🎯'}
+                    </span>
+                    <p className="text-gray-900 dark:text-white">
+                      {POSITIONS.find(p => p.value === user.preferredPosition)?.label || 'Any Position'}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400">
+                    Skill Level
+                  </label>
+                  <div className="mt-1">
+                    <SkillLevelSelector
+                      value={formData.skillLevel}
+                      onChange={() => {}}
+                      readonly
+                      size="sm"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400">
+                    Account Type
+                  </label>
+                  <p className="text-gray-900 dark:text-white mt-1">
+                    {user.isAdmin ? 'Administrator' : 'Player'}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Account Stats */}
+      <Card>
+        <div className="p-6">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Account Statistics
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Member Since</p>
+              <p className="text-xl font-semibold text-gray-900 dark:text-white">
+                {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Matches Played</p>
+              <p className="text-xl font-semibold text-gray-900 dark:text-white">0</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Availability Rate</p>
+              <p className="text-xl font-semibold text-gray-900 dark:text-white">0%</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Preferred Position</p>
+              <p className="text-xl font-semibold text-gray-900 dark:text-white">
+                {POSITIONS.find(p => p.value === user.preferredPosition)?.emoji || '🎯'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}; 
